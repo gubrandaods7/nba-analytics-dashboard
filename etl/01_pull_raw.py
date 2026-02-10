@@ -1,5 +1,8 @@
-# etl/01_pull_raw.py
+#.venv\Scripts\activate
+#$env:GOOGLE_APPLICATION_CREDENTIALS="C:\...\nba-gcp-sa.json"
 
+
+# etl/01_pull_raw.py
 print(">>> BOOT 01_pull_raw.py", flush=True)
 
 import os
@@ -7,6 +10,7 @@ import sys
 import time
 import threading
 import tempfile
+import argparse
 from datetime import date
 from pathlib import Path
 
@@ -15,21 +19,20 @@ import pandas as pd
 from google.cloud import storage
 
 #################################
-# Debug: dump de stack se travar
+# Debug (opcional): dump se travar
 #################################
 faulthandler.enable()
 
-
-def dump_later(seconds: int = 30) -> None:
+def dump_later(seconds: int = 60) -> None:
     time.sleep(seconds)
     print(f"\n>>> DUMPING STACKS after {seconds}s\n", flush=True)
     faulthandler.dump_traceback(file=sys.stdout, all_threads=True)
 
-
+# deixe ligado enquanto estiver backfillando; depois você pode comentar
 threading.Thread(target=dump_later, daemon=True).start()
 
 #################################
-# CERTS (corporate SSL)
+# SSL (corporate) - precisa vir cedo
 #################################
 CA_PATH = Path(__file__).resolve().parents[1] / "certs" / "combined_ca.pem"
 if CA_PATH.exists():
@@ -61,16 +64,8 @@ print(">>> NBAStatsHTTP headers configured", flush=True)
 from nba_api.stats.endpoints import leaguegamelog, leaguestandingsv3
 
 #################################
-# Config
+# GCS helpers
 #################################
-SEASON = "2025-26"
-BUCKET = "nba-data-gustavo"
-ASOF = date.today().strftime("%Y-%m-%d")
-
-raw_games_gcs = f"gs://{BUCKET}/raw/season={SEASON}/endpoint=leaguegamelog/asof={ASOF}/data.parquet"
-raw_stand_gcs = f"gs://{BUCKET}/raw/season={SEASON}/endpoint=leaguestandingsv3/asof={ASOF}/data.parquet"
-
-
 def parse_gs_uri(gs_uri: str) -> tuple[str, str]:
     if not gs_uri.startswith("gs://"):
         raise ValueError(f"Invalid GCS URI: {gs_uri}")
@@ -82,44 +77,49 @@ def parse_gs_uri(gs_uri: str) -> tuple[str, str]:
 
 def upload_file_to_gcs(local_path: str, gs_uri: str) -> None:
     bucket_name, blob_path = parse_gs_uri(gs_uri)
-
     client = storage.Client()
     bucket = client.bucket(bucket_name)
     blob = bucket.blob(blob_path)
-
     blob.upload_from_filename(local_path)
     print(f">>> Uploaded: {gs_uri}", flush=True)
 
 
 def write_parquet_to_gcs(df: pd.DataFrame, gs_uri: str, local_name: str) -> None:
-    # 1) escreve local
     tmp_dir = Path(tempfile.gettempdir())
     local_path = tmp_dir / local_name
 
     print(f">>> Writing parquet locally: {local_path}", flush=True)
     df.to_parquet(local_path, index=False, engine="pyarrow")
 
-    # 2) upload GCS
     print(f">>> Uploading to GCS: {gs_uri}", flush=True)
     upload_file_to_gcs(str(local_path), gs_uri)
 
-    # 3) cleanup
     try:
         local_path.unlink()
     except Exception:
         pass
 
 
-def main() -> None:
-    print(f">>> season={SEASON} asof={ASOF}", flush=True)
+#################################
+# Main
+#################################
+def main(season: str, asof: str, bucket: str) -> None:
+    raw_games_gcs = (
+        f"gs://{bucket}/raw/season={season}/endpoint=leaguegamelog/asof={asof}/data.parquet"
+    )
+    raw_stand_gcs = (
+        f"gs://{bucket}/raw/season={season}/endpoint=leaguestandingsv3/asof={asof}/data.parquet"
+    )
+
+    print(f">>> season={season} asof={asof} bucket={bucket}", flush=True)
 
     # 1) LeagueGameLog
     print(">>> Fetching LeagueGameLog...", flush=True)
-    lg = leaguegamelog.LeagueGameLog(season=SEASON, timeout=30)
+    lg = leaguegamelog.LeagueGameLog(season=season, timeout=30)
     df_games = lg.get_data_frames()[0]
     print(f">>> LeagueGameLog rows={len(df_games)} cols={df_games.shape[1]}", flush=True)
 
-    write_parquet_to_gcs(df_games, raw_games_gcs, f"nba_raw_leaguegamelog_{SEASON}_{ASOF}.parquet")
+    write_parquet_to_gcs(df_games, raw_games_gcs, f"nba_raw_leaguegamelog_{season}_{asof}.parquet")
 
     # 2) Standings
     print(">>> Fetching LeagueStandingsV3...", flush=True)
@@ -127,13 +127,21 @@ def main() -> None:
     df_stand = st.get_data_frames()[0]
     print(f">>> Standings rows={len(df_stand)} cols={df_stand.shape[1]}", flush=True)
 
-    write_parquet_to_gcs(df_stand, raw_stand_gcs, f"nba_raw_standings_{SEASON}_{ASOF}.parquet")
+    write_parquet_to_gcs(df_stand, raw_stand_gcs, f"nba_raw_standings_{season}_{asof}.parquet")
 
     print("\n>>> RAW salvo no GCS:", flush=True)
     print(raw_games_gcs, flush=True)
     print(raw_stand_gcs, flush=True)
-    print(">>> Colunas LeagueGameLog:", list(df_games.columns), flush=True)
+
+
+def parse_args():
+    p = argparse.ArgumentParser()
+    p.add_argument("--season", required=True, help='Ex: "2024-25"')
+    p.add_argument("--asof", required=True, help='Ex: "2026-02-10"')
+    p.add_argument("--bucket", default="nba-data-gustavo")
+    return p.parse_args()
 
 
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+    main(season=args.season, asof=args.asof, bucket=args.bucket)
