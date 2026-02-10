@@ -2,6 +2,7 @@
 
 NBA dashboard (2025–26) built with Python, nba_api, GCP and Streamlit
 
+```mermaid
 flowchart LR
   %% =========================
   %% Styles
@@ -47,3 +48,4 @@ flowchart LR
 
   A3 -->|"chama 01/02 em loop"| A1
   A3 -->|"chama 01/02 em loop"| A2
+```
