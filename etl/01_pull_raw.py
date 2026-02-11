@@ -1,5 +1,6 @@
 #.venv\Scripts\activate
 #$env:GOOGLE_APPLICATION_CREDENTIALS="C:\...\nba-gcp-sa.json"
+# $env:GOOGLE_APPLICATION_CREDENTIALS="C:\Users\gustavo.nersissian\OneDrive - Andrade Gutierrez\Gustavo AG\10 Outros\gcp-secrets\nba-gcp-sa.json"
 
 
 # etl/01_pull_raw.py
